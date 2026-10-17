@@ -1,0 +1,80 @@
+name: Build Android APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - master
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Compilar APK de depuração
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Baixar o código do repositório
+        uses: actions/checkout@v4
+
+      - name: Localizar o projeto (pasta normal ou arquivo comprovantes-pix.zip)
+        run: |
+          set -eu
+          if [ -f gradlew ]; then
+            echo "PROJECT_DIR=." >> "$GITHUB_ENV"
+          elif [ -f comprovantes-pix.zip ]; then
+            mkdir -p _projeto
+            unzip -q comprovantes-pix.zip -d _projeto
+            GRADLEW="$(find _projeto -maxdepth 2 -name gradlew -print -quit)"
+            if [ -z "$GRADLEW" ]; then
+              echo "::error::O arquivo comprovantes-pix.zip não contém o arquivo gradlew."
+              exit 1
+            fi
+            echo "PROJECT_DIR=$(dirname "$GRADLEW")" >> "$GITHUB_ENV"
+          else
+            echo "::error::Projeto não encontrado. Envie os arquivos do projeto (com o gradlew na raiz) ou o arquivo comprovantes-pix.zip para a raiz do repositório."
+            exit 1
+          fi
+
+      - name: Configurar JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Configurar Android SDK (aceita as licenças)
+        uses: android-actions/setup-android@v3
+
+      - name: Instalar plataforma e build-tools do Android
+        run: sdkmanager --install "platforms;android-35" "build-tools;34.0.0"
+
+      - name: Compilar o APK de depuração
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          chmod +x ./gradlew
+          ./gradlew --no-daemon --stacktrace assembleDebug || {
+            echo "::error::A compilação do Gradle falhou. Abra o log do passo acima para ver a causa."
+            exit 1
+          }
+
+      - name: Verificar se o APK foi gerado
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          APK="app/build/outputs/apk/debug/app-debug.apk"
+          if [ ! -f "$APK" ]; then
+            echo "::error::APK não encontrado em $APK."
+            ls -R app/build/outputs || true
+            exit 1
+          fi
+          ls -l "$APK"
+
+      - name: Publicar o APK como artefato
+        uses: actions/upload-artifact@v4
+        with:
+          name: comprovantes-pix-apk
+          path: ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 30
